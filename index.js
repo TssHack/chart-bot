@@ -4,51 +4,84 @@ const axios = require('axios');
 const token = '7000850548:AAHm8y3bG6LGm0l1agzXfhpyR4gDGceB5NI';
 const bot = new TelegramBot(token, { polling: true });
 
-// مرحله 1: دریافت اسم ارز
-bot.on('inline_query', async (query) => {
-  const input = query.query.toUpperCase().replace(/\s/g, '');
-  if (!input || input.length < 3) return;
-
-  const timeframes = ['1m', '5m', '15m', '1h', '4h', '1d'];
-
-  const results = [{
-    type: 'article',
-    id: 'select_timeframe',
-    title: `انتخاب تایم‌فریم برای ${input}`,
-    input_message_content: {
-      message_text: `لطفاً یکی از تایم‌فریم‌ها را برای ${input} انتخاب کنید:`
-    },
+// ======= START =======
+bot.onText(/\/start/, (msg) => {
+  const opts = {
     reply_markup: {
       inline_keyboard: [
-        timeframes.map(tf => ({
-          text: tf,
-          callback_data: `chart|${input}|${tf}`
-        }))
+        [
+          { text: 'لیست ارزها', callback_data: 'show_symbols' },
+          { text: 'ارتباط با نویسنده', url: 'https://t.me/abj0o' }
+        ]
       ]
     }
-  }];
-
-  bot.answerInlineQuery(query.id, results);
+  };
+  bot.sendMessage(msg.chat.id, 'به ربات چارت خوش آمدید!', opts);
 });
 
-// مرحله 2: کاربر یکی از تایم‌فریم‌ها رو انتخاب می‌کنه
-bot.on('callback_query', async (cbQuery) => {
-  const data = cbQuery.data;
-  if (!data.startsWith('chart|')) return;
+// ======= دکمه لیست ارزها =======
+bot.on('callback_query', async (cb) => {
+  const chatId = cb.message.chat.id;
 
-  const [, symbol, timeframe] = data.split('|');
+  if (cb.data === 'show_symbols') {
+    try {
+      const response = await axios.get('https://api.binance.com/api/v3/exchangeInfo');
+      const symbols = response.data.symbols
+        .filter(s => s.status === 'TRADING')
+        .map(s => s.symbol)
+        .slice(0, 200); // فقط 200 تا اول
+
+      const chunks = symbols.reduce((acc, symbol, index) => {
+        const chunkIndex = Math.floor(index / 50);
+        if (!acc[chunkIndex]) acc[chunkIndex] = [];
+        acc[chunkIndex].push(symbol);
+        return acc;
+      }, []);
+
+      for (const chunk of chunks) {
+        await bot.sendMessage(chatId, chunk.join(' | '), { parse_mode: 'Markdown' });
+      }
+
+      bot.sendMessage(chatId, 'میتونی نماد رو کپی و ارسال کنی تا چارتش برات بیاد.');
+    } catch (err) {
+      bot.sendMessage(chatId, 'خطا در دریافت لیست ارزها!');
+    }
+  }
+});
+
+// ======= پیام‌های کاربران =======
+bot.on('message', async (msg) => {
+  const text = msg.text.trim();
+  const chatId = msg.chat.id;
+
+  if (text === '/start') return;
+
+  if (text === '/help' || text === 'راهنما') {
+    return bot.sendMessage(chatId, `
+نحوه استفاده از ربات:
+
+- برای دریافت چارت یک ارز، فقط نماد اون رو بفرست:
+مثال:
+\`NOTUSDT\`
+
+- برای چارت با تایم‌فریم دلخواه:
+\`NOTUSDT 15m\`
+\`BTCUSDT 1h\`
+
+- برای دیدن لیست ارزها، از دکمه "لیست ارزها" استفاده کن.
+
+- ارتباط با من: @abj0o
+`, { parse_mode: 'Markdown' });
+  }
+
+  // بررسی ورودی کاربر
+  const [symbolRaw, timeframeRaw] = text.split(' ');
+  const symbol = symbolRaw.toUpperCase();
+  const timeframe = timeframeRaw || '1h';
+
   const chartUrl = `https://chart-ehsan.onrender.com/chart?symbol=${symbol}&timeframe=${timeframe}`;
 
-  // ارسال چارت به صورت عکس
-  bot.sendPhoto(cbQuery.message.chat.id, chartUrl, {
+  bot.sendPhoto(chatId, chartUrl, {
     caption: `چارت ${symbol} - تایم‌فریم ${timeframe}`
   });
-
-  // حذف دکمه‌ها بعد از انتخاب
-  bot.editMessageReplyMarkup({ inline_keyboard: [] }, {
-    chat_id: cbQuery.message.chat.id,
-    message_id: cbQuery.message.message_id
-  });
-
-  bot.answerCallbackQuery(cbQuery.id);
 });
